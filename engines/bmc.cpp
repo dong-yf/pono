@@ -92,9 +92,9 @@ bool Bmc::step(int i)
       logger.log(2, "  BMC adding transition for j-1 = {}", j - 1);
       solver_->assert_formula(unroller_.at_time(ts_.trans(), j - 1));
       if (options_.bmc_neg_init_step_) {
-	logger.log(2, "  BMC adding negated init constraint for step {}", j);
-	Term not_init = solver_->make_term(PrimOp::Not, unroller_.at_time(ts_.init(), j));
-	solver_->assert_formula(not_init);
+        logger.log(2, "  BMC adding negated init constraint for step {}", j);
+        Term not_init = solver_->make_term(PrimOp::Not, unroller_.at_time(ts_.init(), j));
+        solver_->assert_formula(not_init);
       }
     }
   }
@@ -143,7 +143,7 @@ bool Bmc::step(int i)
       // before 'get-value'. Hence don't 'push' if we don't add any terms
       // in function 'bmc_interval_block_cex_ub'.
       if (cex_upper_bound + 1 <= i)
-	solver_->push();
+	      solver_->push();
       bmc_interval_block_cex_ub(cex_upper_bound + 1, i);
       // Find shortest cex within tested interval given by bad state clause
       // 'success' will be false if binary search fails or linear search is enabled
