@@ -33,7 +33,15 @@ public:
 
   void initialize() override;
 
-  ProverResult check_until(int k) override;
+  std::vector<smt::Term> generateRandomArray();
+
+  smt::UnorderedTermMap get_var_map(int id, smt::UnorderedTermMap & subst_N);
+  
+  void print_theta(std::vector<smt::TermVec> Theta);
+
+  smt::UnorderedTermMap subst_bad();
+
+  ProverResult check_until(int N) override;
 
  protected:
   bool step(int i);

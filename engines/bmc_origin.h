@@ -20,14 +20,14 @@
 
 namespace pono {
 
-class Bmc : public Prover
+class OBmc : public Prover
 {
 public:
-  Bmc(const Property & p, const TransitionSystem & ts,
+  OBmc(const Property & p, const TransitionSystem & ts,
       const smt::SmtSolver & solver,
       PonoOptions opt = PonoOptions());
 
-  ~Bmc();
+  ~OBmc();
 
   typedef Prover super;
 
