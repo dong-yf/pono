@@ -14,14 +14,14 @@
  **
  **/
 
-#include "bmc.h"
+#include "bmc_origin.h"
 #include "utils/logger.h"
 
 using namespace smt;
 
 namespace pono {
 
-Bmc::Bmc(const Property & p, const TransitionSystem & ts,
+OBmc::OBmc(const Property & p, const TransitionSystem & ts,
          const SmtSolver & solver, PonoOptions opt)
   : super(p, ts, solver, opt)
 {
@@ -31,9 +31,9 @@ Bmc::Bmc(const Property & p, const TransitionSystem & ts,
   bound_start_ = opt.bmc_bound_start_;
 }
 
-Bmc::~Bmc() {}
+OBmc::~OBmc() {}
 
-void Bmc::initialize()
+void OBmc::initialize()
 {
   if (initialized_) {
     return;
@@ -50,7 +50,7 @@ void Bmc::initialize()
   solver_->assert_formula(unroller_.at_time(ts_.init(), 0));
 }
 
-ProverResult Bmc::check_until(int k)
+ProverResult OBmc::check_until(int k)
 {
   initialize();
 
@@ -76,7 +76,7 @@ ProverResult Bmc::check_until(int k)
   return ProverResult::UNKNOWN;
 }
 
-bool Bmc::step(int i)
+bool OBmc::step(int i)
 {
   logger.log(1, "\nBMC checking at bound: {}", i);
   
@@ -194,7 +194,7 @@ bool Bmc::step(int i)
 }
 
 // Get an upper bound on the cex, which is located in interval '[lb,ub]'
-int Bmc::bmc_interval_get_cex_ub(const int lb, const int ub)
+int OBmc::bmc_interval_get_cex_ub(const int lb, const int ub)
 {
   const Term true_term = solver_->make_term(true);
   assert(lb <= ub);
@@ -218,7 +218,7 @@ int Bmc::bmc_interval_get_cex_ub(const int lb, const int ub)
 // Add negated bad state predicate for all bounds in interval '[start,end]'.
 // This way, we restrict the search space of the solver to disregard these
 // bounds when searching for a cex.
-void Bmc::bmc_interval_block_cex_ub(const int start, const int end)
+void OBmc::bmc_interval_block_cex_ub(const int start, const int end)
 {
   logger.log(2, "  BMC permanently blocking interval [start,end] = [{},{}]", start, end);
   for (int k = start; k <= end; k++) {
@@ -229,7 +229,7 @@ void Bmc::bmc_interval_block_cex_ub(const int start, const int end)
 }
 
 // Run binary search for cex within interval '[reached_k_ + 1, upper_bound]'.
-bool Bmc::find_shortest_cex_binary_search(const int upper_bound)
+bool OBmc::find_shortest_cex_binary_search(const int upper_bound)
 {
   assert (bin_search_frames_ == 0);
   assert (reached_k_ < upper_bound);
@@ -319,7 +319,7 @@ bool Bmc::find_shortest_cex_binary_search(const int upper_bound)
    frame in each solver call to search for shortest
    counterexample. This has the effect that we potentially benefit less
    from incremental solving. */
-bool Bmc::find_shortest_cex_binary_search_less_inc(const int upper_bound)
+bool OBmc::find_shortest_cex_binary_search_less_inc(const int upper_bound)
 {
   assert (reached_k_ < upper_bound);
   logger.log(2, "  BMC less incremental binary search, cex found in interval "\
@@ -384,7 +384,7 @@ bool Bmc::find_shortest_cex_binary_search_less_inc(const int upper_bound)
 }
 
 // Run linear search for cex within interval '[reached_k_ + 1, upper_bound]'
-void Bmc::find_shortest_cex_linear_search(const int upper_bound)
+void OBmc::find_shortest_cex_linear_search(const int upper_bound)
 {  
   assert (reached_k_ < upper_bound);
   logger.log(2, "  BMC linear search, cex found in interval: lower bound = reached k = {},"\

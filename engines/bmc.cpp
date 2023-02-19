@@ -15,7 +15,9 @@
  **/
 
 #include "bmc.h"
+#include "engines/ic3base.h"
 #include "utils/logger.h"
+#include <unordered_map>
 
 using namespace smt;
 
@@ -50,9 +52,75 @@ void Bmc::initialize()
   solver_->assert_formula(unroller_.at_time(ts_.init(), 0));
 }
 
+smt::UnorderedTermMap Bmc::get_var_map(int id, smt::UnorderedTermMap & subst_N) {
+  UnorderedTermMap subst = smt::UnorderedTermMap();
+
+  for (auto v : ts_.statevars()) {
+    smt::Term vn = ts_.next(v);
+    std::string name = v->to_string();
+    name += '_' + std::to_string(id);
+    // logger.log(3, "BMC subst state var name :{}", name);
+    Term timed_v = solver_->make_symbol(name, v->get_sort());
+    subst[v] = timed_v;
+    subst_N[vn] = timed_v;
+  }
+  return subst;
+}
+
+smt::UnorderedTermMap Bmc::subst_bad() {
+  UnorderedTermMap subst = smt::UnorderedTermMap();
+
+  for (auto v : ts_.statevars()) {
+    smt::Term vn = ts_.next(v);
+    logger.log(3, "next v name : {}", vn->to_string());
+    subst[v] = vn;
+  }
+  return subst;
+}
+
+void Bmc::print_theta(std::vector<smt::TermVec> Theta) {
+  for (auto tv : Theta) {
+    for (auto &it : tv) {
+      std::string name = it->to_string();
+      // logger.log(3, "Theta item name {} is {} ", name, it);
+    }
+  }
+}
+
+smt::TermVec Bmc::generateRandomArray() {
+	smt::TermVec state_bits;
+  Term bv1 = solver_->make_term(1, solver_->make_sort(BV, 1));
+  // random seed
+  srand(time(NULL));
+
+  for (const auto & sv : ts_.statevars()) {
+    const Sort & sort = sv->get_sort();
+    assert(sort->get_sort_kind() == BV);
+    for (size_t i = 0; i < sort->get_width(); ++i) {
+      int random = rand() % 2;
+      if (random == 1) {
+        state_bits.push_back(solver_->make_term(
+            Equal, solver_->make_term(Op(Extract, i, i), sv), bv1));
+      }
+      else if (random == 0) {
+        state_bits.push_back(solver_->make_term(PrimOp::Not, solver_->make_term(
+            Equal, solver_->make_term(Op(Extract, i, i), sv), bv1)));
+      }
+      else {
+        assert(false);
+      }
+    }
+  }
+  
+  for (auto & item : state_bits) {
+    logger.log(3, "state_bits : {}", item);
+  }
+
+  return state_bits;
+}
+
 ProverResult Bmc::check_until(int k)
 {
-  initialize();
 
   //NOTE: there is a corner case where an instance is trivially
   //unsatisfiable, i.e., safe, when the conjunction of initial state
@@ -60,19 +128,110 @@ ProverResult Bmc::check_until(int k)
   //could also check this using unsat core functionality of solver (if
   //supported), and check if bad state predicate is in core
 
-  logger.log(1, "BMC bound_start_: {} ", bound_start_);
-  logger.log(1, "BMC bound_step_: {} ", bound_step_);
-
   // Options 'bmc_exponential_step_' results in doubling the bound in every step
-  const bool exp_step = options_.bmc_exponential_step_;
 
-  for (int i = bound_start_; i <= k;
-       i = exp_step ? (i == 0 ? 1 : i << 1) : (i + bound_step_)) {
-    if (!step(i)) {
-      compute_witness();
-      return ProverResult::FALSE;
+  int D = 8;
+  smt::TermVec theta = generateRandomArray();
+  int n = theta.size();
+  logger.log(3, "BMC state bits size is = {}", n);
+  std::vector<smt::TermVec> Theta;
+  int k_ = (n-2)/(D-1) + 1;
+  int i = 0;
+  for(i = 0; i + k_ <= n; i += k_) {
+    smt::TermVec Theta_i(theta.begin() + i, theta.begin() + i + k_);
+    Theta.push_back(Theta_i);
+  }
+  if(i < n) {
+    smt::TermVec Theta_i(theta.begin() + i, theta.end());
+    Theta.push_back(Theta_i);
+  }
+  logger.log(3, "Theta size n = {}", Theta.size());
+  print_theta(Theta);
+  // compute MID
+  std::vector<smt::Term> MID((n - 1)/k_ + 1);
+  for(i = 1; i <= (n - 1)/k_; i++) {
+    // [n/k] = (n-1) / k + 1, Theta [0, k) not [1, k] in pseudocode, so we use (n-1) / k to replace [n/k]
+    // smt::Term op1 = solver_->make_term(PrimOp::And, termVec[(n-1)/k]);
+    smt::Term op;
+    if (Theta[(n-1)/k_ - i].size() == 1) {
+      op = Theta[(n-1)/k_ - i][0];
+    }
+    else {
+      op = solver_->make_term(PrimOp::And, Theta[(n-1)/k_ - i]);
+    }
+    MID[i-1] = solver_->make_term(PrimOp::Not, op);
+    for (int j = i - 1; j > 0; j--) {
+      smt::Term operand;
+      if (Theta[(n-1)/k_ - j + 1].size() == 1) {
+        operand = Theta[(n-1)/k_ - j + 1][0];
+      }
+      else {
+        operand = solver_->make_term(PrimOp::And, Theta[(n-1)/k_ - j + 1]);
+      }
+      MID[i-1] = solver_->make_term(PrimOp::And, MID[i-1], operand);
     }
   }
+  if(Theta[0].size() > 1) {
+    MID[(n-1)/k_] = solver_->make_term(PrimOp::And, Theta[0]);
+  }
+  else {
+    MID[(n-1)/k_] = Theta[0][0];
+  }
+  for(i = 1; i < (n - 1)/k_; i++) {
+    smt::Term op;
+    if (Theta[i].size() == 1) {
+      op = Theta[i][0];
+    }
+    else {
+      op = solver_->make_term(PrimOp::And, Theta[i]);
+    }
+    MID[(n-1)/k_] = solver_->make_term(PrimOp::And, MID[(n-1)/k_], op);
+  }
+  
+  smt::Term W_XXN = ts_.trans();
+  smt::Term TS = ts_.trans();
+  // consider move it to the outer loop
+  int id = 1;
+  for(i = 1; i <= (n-1)/k_ + 1; i++) {
+    smt::UnorderedTermMap subst_N = smt::UnorderedTermMap();
+    smt::UnorderedTermMap subst = get_var_map(id, subst_N);
+    id += 1;
+    smt::Term W_XU = solver_->substitute(W_XXN, subst_N);
+    logger.log(3, "TRANS: W_XU\n{}", W_XU);
+    smt::Term W_UXN = solver_->substitute(W_XXN, subst);
+    logger.log(3, "TRANS: W_UXN\n{}", W_UXN);
+    smt::Term MIDU = solver_->substitute(MID[(n-1)/k_-i+1], subst);
+    logger.log(3, "MIDU : \n{}", MIDU);
+    smt::Term tmp1 = solver_->make_term(PrimOp::And, W_XU, MIDU);
+    // logger.log(3, "tmp1: \n{}", tmp1);
+    smt::Term tmp = solver_->make_term(PrimOp::And, tmp1, W_UXN);
+    // logger.log(3, "tmp: \n{}", tmp);
+    W_XXN = solver_->make_term(PrimOp::Or, W_XXN, tmp);
+    // logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+  }
+  // smt::Term tmp = solver_->make_term(PrimOp::And, ts_.init(), W_XXN);
+  // smt::Term bad_formula = solver_->substitute(bad_, subst_bad());
+  // smt::Term need_to_check = solver_->make_term(PrimOp::And, tmp, bad_formula);
+  // logger.log(3, "need to check formula is : \n{}", need_to_check);
+  // solver_->assert_formula(need_to_check);
+  
+  logger.log(3, "INIT: \n{}", ts_.init());
+  solver_->assert_formula(ts_.init()); 
+  logger.log(3, "INIT: \n{}", ts_.init());
+  logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+  solver_->assert_formula(W_XXN);
+  logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+  smt::Term bad_formula = solver_->substitute(bad_, subst_bad());
+  logger.log(3, "BAD property before: \n{}", bad_);
+  logger.log(3, "BAD property after: \n{}", bad_formula);
+  solver_->assert_formula(bad_formula);
+
+  Result r = solver_->check_sat();
+  if (r.is_sat()) {
+    logger.log(1, "  WMC check unsatisfiable");
+    return ProverResult::FALSE;
+  }
+
   return ProverResult::UNKNOWN;
 }
 
