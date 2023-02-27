@@ -35,11 +35,16 @@ public:
 
   std::vector<smt::Term> generateRandomArray();
 
-  smt::UnorderedTermMap get_var_map(int id, smt::UnorderedTermMap & subst_N);
+  smt::UnorderedTermMap make_subst_U(int id, smt::UnorderedTermMap & subst_N, smt::TermVec & Uvec);
   
+  smt::Term substitute(const smt::Term term,
+                              const smt::UnorderedTermMap & substitution_map) const;                        
+
   void print_theta(std::vector<smt::TermVec> Theta);
 
-  smt::UnorderedTermMap subst_bad();
+  smt::UnorderedTermMap make_fresh_U(int & id, smt::TermVec & Uvec);
+
+  smt::UnorderedTermMap make_subst_bad();
 
   ProverResult check_until(int N) override;
 

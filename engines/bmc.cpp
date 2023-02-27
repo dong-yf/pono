@@ -52,7 +52,23 @@ void Bmc::initialize()
   solver_->assert_formula(unroller_.at_time(ts_.init(), 0));
 }
 
-smt::UnorderedTermMap Bmc::get_var_map(int id, smt::UnorderedTermMap & subst_N) {
+smt::UnorderedTermMap Bmc::make_fresh_U(int & id, smt::TermVec & Uvec) {
+  UnorderedTermMap subst = smt::UnorderedTermMap();
+  smt::TermVec Uvec_copy = Uvec;
+
+  for(auto v : Uvec_copy) {
+    std::string name = v->to_string();
+    name += '_' + std::to_string(id);
+    Term subst_v = solver_->make_symbol(name, v->get_sort());
+    subst[v] = subst_v;
+    Uvec.push_back(subst_v);
+  }
+
+  return subst;
+}
+
+smt::UnorderedTermMap Bmc::make_subst_U(int id, smt::UnorderedTermMap & subst_N, smt::TermVec & Uvec) {
+  // Uvec.clear();
   UnorderedTermMap subst = smt::UnorderedTermMap();
 
   for (auto v : ts_.statevars()) {
@@ -63,11 +79,12 @@ smt::UnorderedTermMap Bmc::get_var_map(int id, smt::UnorderedTermMap & subst_N) 
     Term timed_v = solver_->make_symbol(name, v->get_sort());
     subst[v] = timed_v;
     subst_N[vn] = timed_v;
+    Uvec.push_back(timed_v);
   }
   return subst;
 }
 
-smt::UnorderedTermMap Bmc::subst_bad() {
+smt::UnorderedTermMap Bmc::make_subst_bad() {
   UnorderedTermMap subst = smt::UnorderedTermMap();
 
   for (auto v : ts_.statevars()) {
@@ -119,6 +136,50 @@ smt::TermVec Bmc::generateRandomArray() {
   return state_bits;
 }
 
+smt::Term Bmc::substitute(const smt::Term term,
+                              const smt::UnorderedTermMap & substitution_map) const
+{
+  // cache starts with the substitutions
+  UnorderedTermMap cache(substitution_map);
+  TermVec to_visit{ term };
+  TermVec cached_children;
+  Term t;
+  while (to_visit.size())
+  {
+    t = to_visit.back();
+    to_visit.pop_back();
+    if (cache.find(t) == cache.end())
+    {
+      // doesn't get updated yet, just marking as visited
+      cache[t] = t;
+      to_visit.push_back(t);
+      for (auto c : t)
+      {
+        to_visit.push_back(c);
+      }
+    }
+    else
+    {
+      cached_children.clear();
+      for (auto c : t)
+      {
+        logger.log(3, "The current term c is {}\n", c);
+        cached_children.push_back(cache.at(c));
+      }
+
+      // const arrays have children but don't need to be rebuilt
+      // (they're constructed in a particular way anyway)
+      if (cached_children.size() && !t->is_value())
+      { 
+        // logger.log(3, "The current term is {}\n", term);
+        cache[t] = solver_->make_term(t->get_op(), cached_children);
+      }
+    }
+  }
+
+  return cache.at(term);
+}
+
 ProverResult Bmc::check_until(int k)
 {
 
@@ -160,13 +221,13 @@ ProverResult Bmc::check_until(int k)
       op = solver_->make_term(PrimOp::And, Theta[(n-1)/k_ - i]);
     }
     MID[i-1] = solver_->make_term(PrimOp::Not, op);
-    for (int j = i - 1; j > 0; j--) {
+    for (int j = (n-1)/k_ - i + 1; j <= (n-1)/k_; j++) {
       smt::Term operand;
-      if (Theta[(n-1)/k_ - j + 1].size() == 1) {
-        operand = Theta[(n-1)/k_ - j + 1][0];
+      if (Theta[j].size() == 1) {
+        operand = Theta[j][0];
       }
       else {
-        operand = solver_->make_term(PrimOp::And, Theta[(n-1)/k_ - j + 1]);
+        operand = solver_->make_term(PrimOp::And, Theta[j]);
       }
       MID[i-1] = solver_->make_term(PrimOp::And, MID[i-1], operand);
     }
@@ -177,7 +238,8 @@ ProverResult Bmc::check_until(int k)
   else {
     MID[(n-1)/k_] = Theta[0][0];
   }
-  for(i = 1; i < (n - 1)/k_; i++) {
+
+  for(i = 1; i <= (n - 1)/k_; i++) {
     smt::Term op;
     if (Theta[i].size() == 1) {
       op = Theta[i][0];
@@ -190,38 +252,48 @@ ProverResult Bmc::check_until(int k)
   
   smt::Term W_XXN = ts_.trans();
   smt::Term TS = ts_.trans();
+  smt::Term W_XXN_1 = ts_.trans();
+  smt::Term W_XXN_2 = ts_.trans();
   // consider move it to the outer loop
   int id = 1;
+  smt::TermVec Uvec;
   for(i = 1; i <= (n-1)/k_ + 1; i++) {
     smt::UnorderedTermMap subst_N = smt::UnorderedTermMap();
-    smt::UnorderedTermMap subst = get_var_map(id, subst_N);
+    smt::UnorderedTermMap subst = make_subst_U(id, subst_N, Uvec);
+    // logger.log(3, "--------------------- \n");
     id += 1;
-    smt::Term W_XU = solver_->substitute(W_XXN, subst_N);
-    logger.log(3, "TRANS: W_XU\n{}", W_XU);
-    smt::Term W_UXN = solver_->substitute(W_XXN, subst);
-    logger.log(3, "TRANS: W_UXN\n{}", W_UXN);
+
+    smt::Term W_XU = solver_->substitute(W_XXN_1, subst_N);
+    // logger.log(3, "TRANS: W_XU\n{}", W_XU);
+    smt::Term W_UXN = solver_->substitute(W_XXN_2, subst);
+    // logger.log(3, "TRANS: W_UXN\n{}", W_UXN);
     smt::Term MIDU = solver_->substitute(MID[(n-1)/k_-i+1], subst);
     logger.log(3, "MIDU : \n{}", MIDU);
     smt::Term tmp1 = solver_->make_term(PrimOp::And, W_XU, MIDU);
     // logger.log(3, "tmp1: \n{}", tmp1);
     smt::Term tmp = solver_->make_term(PrimOp::And, tmp1, W_UXN);
     // logger.log(3, "tmp: \n{}", tmp);
+
+    // for (auto v : Uvec) {
+    //   tmp = solver_->make_term(Exists, v, tmp);
+    // }
+    
     W_XXN = solver_->make_term(PrimOp::Or, W_XXN, tmp);
-    // logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+    smt::UnorderedTermMap fresh_map = make_fresh_U(id, Uvec);
+    id += 1;
+    W_XXN_1 = solver_->substitute(W_XXN, fresh_map);
+    fresh_map = make_fresh_U(id, Uvec);
+    id += 1;
+    W_XXN_2 = solver_->substitute(W_XXN, fresh_map);
+    logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+
+
   }
-  // smt::Term tmp = solver_->make_term(PrimOp::And, ts_.init(), W_XXN);
-  // smt::Term bad_formula = solver_->substitute(bad_, subst_bad());
-  // smt::Term need_to_check = solver_->make_term(PrimOp::And, tmp, bad_formula);
-  // logger.log(3, "need to check formula is : \n{}", need_to_check);
-  // solver_->assert_formula(need_to_check);
   
-  logger.log(3, "INIT: \n{}", ts_.init());
   solver_->assert_formula(ts_.init()); 
-  logger.log(3, "INIT: \n{}", ts_.init());
-  logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
   solver_->assert_formula(W_XXN);
-  logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
-  smt::Term bad_formula = solver_->substitute(bad_, subst_bad());
+  // logger.log(3, "TRANS: W_XXN\n{}", W_XXN);
+  smt::Term bad_formula = solver_->substitute(bad_, make_subst_bad());
   logger.log(3, "BAD property before: \n{}", bad_);
   logger.log(3, "BAD property after: \n{}", bad_formula);
   solver_->assert_formula(bad_formula);
